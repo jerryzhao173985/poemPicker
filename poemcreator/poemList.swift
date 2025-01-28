@@ -45,6 +45,10 @@ struct PoemListView: View {
                         },
                         onDelete: {
                             viewModel.delete(poem)
+                        },
+                        onEvaluate: {
+                            // THE NEW BUTTON: Evaluate
+                            viewModel.evaluatePoem(poem)
                         }
                     )
                     .contextMenu {
@@ -54,6 +58,10 @@ struct PoemListView: View {
                             viewModel.delete(poem)
                         } label: {
                             Text("Delete")
+                        }
+                        Divider()
+                        Button("Evaluate") {
+                            viewModel.evaluatePoem(poem)
                         }
                         Divider()
                         Button("Share Poem") {
@@ -88,6 +96,18 @@ struct PoemListView: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
                             .background(Color.blue.opacity(0.1))
+                            .cornerRadius(8)
+                    }
+                    
+                    // Evaluate All
+                    Button {
+                        evaluateAllDisplayed()
+                    } label: {
+                        Label("Evaluate All", systemImage: "brain.head.profile")
+                            .font(.system(size: 14, weight: .semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(Color.purple.opacity(0.1))
                             .cornerRadius(8)
                     }
 
@@ -148,6 +168,14 @@ struct PoemListView: View {
             }
         }
     }
+    
+    private func evaluateAllDisplayed() {
+        // The poems currently in the list, i.e. `displayedPoems`
+        // which is typically `viewModel.filteredPoems`
+        let poemsToEvaluate = viewModel.filteredPoems
+        viewModel.evaluateAll(poems: poemsToEvaluate)
+    }
+
 
     // Single poem share
     private func shareSinglePoem(_ poem: Poem) {

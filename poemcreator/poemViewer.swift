@@ -1,4 +1,55 @@
+import Foundation
 import SwiftUI
+import SwiftOpenAI
+
+public let systemMessage = """
+You are a Chinese poem evaluator tasked with determining the quality of a given poem and deciding whether it should be "accepted" or "deleted". Use the following criteria to evaluate the poem and provide your decision. 
+
+Analysis Criteria as reference for example: Title, Tone, Style, Imagery, Symbolism, Themes, Structure, Poetic Techniques, Emotional Impact and so on. If mostly/generally positive, mark Accepted. If mostly negative, mark Deleted.
+
+Author Background:
+The author specializes in introspection and existential themes, using vivid natural imagery and a free-verse style. Their work explores life, identity, the tension between belonging and escape, and incorporates philosophical and spiritual elements.
+
+Guidelines:
+- Ensure the poem is written in Chinese.
+- Ensure the poem has no missing or inconsistent phrases or sentences.
+- Do not use parallelism (绝对不要排比！)
+- Keep responses concise and brief (要尽量简短简洁，不要太长)
+"""
+//                "You are a poem evaluator. Decide if the poem is good or not. Mark Accepted or Deleted."
+
+
+/// What we eventually want to know for the poem
+struct EvaluationResult {
+    let accepted: Bool
+    let deleted: Bool
+}
+
+/// Directly matches the GPT response format from your JSON schema
+struct EvaluateResponse: Decodable {
+    let steps: [Step]
+    let final_answer: String
+
+    struct Step: Decodable {
+        let Accepted: Bool
+        let Deleted: Bool
+    }
+}
+
+struct Config {
+    static var apiKey: String {
+        guard let path = Bundle.main.path(forResource: "Config", ofType: "plist"),
+              let xml = FileManager.default.contents(atPath: path),
+              let config = try? PropertyListSerialization.propertyList(from: xml, options: .mutableContainersAndLeaves, format: nil) as? [String: Any],
+              let key = config["API_KEY"] as? String else {
+            fatalError("API_KEY not found in Config.plist")
+        }
+        return key
+    }
+}
+
+public let apiKey = Config.apiKey
+public let service = OpenAIServiceFactory.service(apiKey: apiKey)
 
 class PoemViewModel: ObservableObject {
     @Published var poems: [Poem] = []
@@ -120,6 +171,174 @@ class PoemViewModel: ObservableObject {
             poems[idx].edited = true
         }
     }
+    
+    // MARK: Evaluate a poem
+    func evaluatePoem(_ poem: Poem) {
+        Task {
+            do {
+                let prompt = """
+                Title: \(poem.image)
+                Body: \(poem.response)
+                """
+
+                // 1) Perform the async GPT call
+                let evaluation = try await openAIEvaluatePoem(prompt: prompt, systemPrompt: systemMessage)
+
+                // 2) Update the poem on main thread
+                await MainActor.run {
+                    if evaluation.accepted && !evaluation.deleted {
+                        self.accept(poem)
+                    } else if evaluation.deleted {
+                        self.delete(poem)
+                    } else {
+                        print("No decision made, or conflicting results. (accepted=\(evaluation.accepted), deleted=\(evaluation.deleted))")
+                    }
+                }
+            } catch {
+                print("Error evaluating poem: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: The async GPT call (using your chat completion object)
+    private func openAIEvaluatePoem(prompt: String, systemPrompt: String) async throws -> EvaluationResult {
+        // We'll build the JSON schema parameters, etc.
+        // Then call an async 'service.startChat(parameters:)' that returns ChatCompletionObject
+        // and parse the first choice's message.content as JSON.
+
+        // 1: JSON schema definitions
+        // (You can keep them or store them outside if reused)
+        let stepSchema = JSONSchema(
+           type: .object,
+           properties: [
+              "Accepted": JSONSchema(type: .boolean),
+              "Deleted": JSONSchema(type: .boolean)
+           ],
+           required: ["Accepted", "Deleted"],
+           additionalProperties: false
+        )
+
+        let stepsArraySchema = JSONSchema(type: .array, items: stepSchema)
+        let finalAnswerSchema = JSONSchema(type: .string)
+
+        let responseFormatSchema = JSONSchemaResponseFormat(
+           name: "evaluate",
+           strict: true,
+           schema: JSONSchema(
+              type: .object,
+              properties: [
+                 "steps": stepsArraySchema,
+                 "final_answer": finalAnswerSchema
+              ],
+              required: ["steps", "final_answer"],
+              additionalProperties: false
+           )
+        )
+
+        // 2) Build the ChatCompletionParameters
+        let sysMessage = ChatCompletionParameters.Message(role: .system, content: .text(systemPrompt))
+        let userMessage = ChatCompletionParameters.Message(role: .user, content: .text(prompt))
+        let parameters = ChatCompletionParameters(
+            messages: [sysMessage, userMessage],
+            model: .gpt4o20241120,
+            responseFormat: .jsonSchema(responseFormatSchema)
+        )
+
+        // 3) Make the network call, get ChatCompletionObject
+        let chatResponse: ChatCompletionObject
+        do {
+            chatResponse = try await service.startChat(parameters: parameters)
+        } catch {
+            throw error
+        }
+
+        // 4) Get the first choice
+        guard let firstChoice = chatResponse.choices.first else {
+            throw NSError(domain: "PoemEval", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "No choices returned from GPT"
+            ])
+        }
+
+        // 5) The actual JSON is in firstChoice.message.content
+        guard let content = firstChoice.message.content, !content.isEmpty else {
+            throw NSError(domain: "PoemEval", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "GPT returned empty content"
+            ])
+        }
+
+        // 6) Parse the JSON string into EvaluateResponse
+        let data = Data(content.utf8)
+        let evaluateResponse: EvaluateResponse
+        do {
+            evaluateResponse = try JSONDecoder().decode(EvaluateResponse.self, from: data)
+        } catch {
+            throw NSError(domain: "PoemEval", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to parse EvaluateResponse: \(error)"
+            ])
+        }
+
+        // 7) Extract accepted/deleted from the first step
+        guard let firstStep = evaluateResponse.steps.first else {
+            return EvaluationResult(accepted: false, deleted: false)
+        }
+        let accepted = firstStep.Accepted
+        let deleted = firstStep.Deleted
+        print("Evaluation from GPT: accepted=\(accepted), deleted=\(deleted), final=\(evaluateResponse.final_answer)")
+
+        // 8) Return our local result
+        return EvaluationResult(accepted: accepted, deleted: deleted)
+    }
+    
+    /// Evaluate all poems in parallel. Each poem spawns a child task calling GPT.
+    func evaluateAll(poems: [Poem]) {
+        Task {
+            // 1) Create a task group that returns (poem, result) for each poem
+            await withTaskGroup(of: (Poem, Result<EvaluationResult, Error>).self) { group in
+
+                // 2) For each poem, add a child task
+                for poem in poems {
+                    group.addTask {
+                        do {
+                            let evaluation = try await self.openAIEvaluatePoem(
+                                prompt: """
+                                Title: \(poem.image)
+                                Body: \(poem.response)
+                                """,
+                                systemPrompt: systemMessage
+//                                    "You are a poem evaluator. Decide if the poem is good or not. Mark Accepted or Deleted."
+                            )
+                            // Return success result
+                            return (poem, .success(evaluation))
+                        } catch {
+                            // Return failure result
+                            return (poem, .failure(error))
+                        }
+                    }
+                }
+
+                // 3) Process each child’s result as soon as it finishes
+                for await (poem, outcome) in group {
+                    switch outcome {
+                    case .success(let evaluation):
+                        // Update poem on the main actor
+                        await MainActor.run {
+                            if evaluation.accepted && !evaluation.deleted {
+                                self.accept(poem)
+                            } else if evaluation.deleted {
+                                self.delete(poem)
+                            } else {
+                                print("No decision for poem id=\(poem.id)")
+                            }
+                        }
+
+                    case .failure(let error):
+                        print("Error evaluating poem id \(poem.id): \(error)")
+                    }
+                }
+            }
+        }
+    }
+
 
     func toggleSelection(of poem: Poem) {
         if selectedPoemIDs.contains(poem.id) {

@@ -12,6 +12,8 @@ struct PoemRow: View {
     let onEditRequest: () -> Void
     let onDelete: () -> Void
 
+    let onEvaluate: () -> Void
+    
     var body: some View {
         HStack {
             if multiSelectionMode {
@@ -73,6 +75,12 @@ struct PoemRow: View {
                     onDelete()
                 } label: {
                     Image(systemName: "trash").foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+                
+                // The new Evaluate button
+                Button(action: onEvaluate) {
+                    Image(systemName: "brain.head.profile") // or another SF Symbol
                 }
                 .buttonStyle(.plain)
             }
