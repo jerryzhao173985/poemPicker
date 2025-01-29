@@ -23,6 +23,12 @@ struct PoemListView: View {
             .padding(.vertical, 8)
 
             TextField("Search by title...", text: $viewModel.searchText)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .submitLabel(.done)                   // show a “Done” button
+                .onSubmit {
+                    // Dismiss keyboard
+                    UIApplication.shared.endEditing()
+                }
                 .padding(8)
                 .background(Color(UIColor.secondarySystemBackground))
                 .cornerRadius(8)
@@ -71,6 +77,7 @@ struct PoemListView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollDismissesKeyboard(.interactively) // dismiss keyboard on scroll
 //            .refreshable {
 //                // If you want to reload default or do nothing
 ////                viewModel.loadDefaultPoems()
