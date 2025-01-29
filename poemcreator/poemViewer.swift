@@ -462,5 +462,46 @@ class PoemViewModel: ObservableObject {
     private func getDocumentsDirectory() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
+    
+    
+    @discardableResult
+    func addPoemFromClipboard() -> Bool {
+        guard let clipboardText = UIPasteboard.general.string,
+              !clipboardText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
+
+        // Split lines, first line => image, rest => response
+        let lines = clipboardText.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !lines.isEmpty else { return false }
+
+        let newTitle = lines[0]
+        let newBody = lines.dropFirst().joined(separator: "\n")
+
+        let newId = generateNewID()
+        let newPoem = Poem(
+            id: newId,
+            adaptor: "",
+            outer_idx: 0,
+            inner_idx: 0,
+            image: newTitle,
+            response: newBody,
+            accepted: false,
+            deleted: false,
+            edited: false
+        )
+
+        poems.append(newPoem)
+        return true
+    }
+
+    func generateNewID() -> Int {
+        let maxID = poems.map(\.id).max() ?? 0
+        return maxID + 1
+    }
+    
+    
 }
 
