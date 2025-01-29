@@ -60,7 +60,7 @@ struct PoemRow: View {
             if !multiSelectionMode {
                 // Add copy button in the row
                 Button(action: {
-                    UIPasteboard.general.string = "\(poem.image)\n\(poem.response)"
+                    onCopy()
                 }) {
                     Image(systemName: "doc.on.doc")  // Copy icon
                 }
