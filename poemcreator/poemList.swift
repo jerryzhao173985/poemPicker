@@ -55,9 +55,15 @@ struct PoemListView: View {
                         onEvaluate: {
                             // THE NEW BUTTON: Evaluate
                             viewModel.evaluatePoem(poem)
+                        },
+                        onCopy: {
+                            UIPasteboard.general.string = "\(poem.image)\n\(poem.response)"
                         }
                     )
                     .contextMenu {
+                        Button("Copy") {
+                            UIPasteboard.general.string = "\(poem.image)\n\(poem.response)"
+                        }
                         Button("Edit") { poemToEdit = poem }
                         Button("Accept") { viewModel.accept(poem) }
                         Button(role: .destructive) {
@@ -73,6 +79,20 @@ struct PoemListView: View {
                         Button("Share Poem") {
                             shareSinglePoem(poem)
                         }
+                    } preview: {
+                        // The custom preview that appears above the menu
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(poem.image)
+                                .font(.title2)
+                                .bold()
+                            ScrollView {
+                                Text(poem.response)
+                                    .font(.body)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding()
+                        .presentationCompactAdaptation(.none)
                     }
                 }
             }
@@ -117,6 +137,8 @@ struct PoemListView: View {
                             .background(Color.purple.opacity(0.1))
                             .cornerRadius(8)
                     }
+                    // disable if already in progress
+                    .disabled(viewModel.isBulkEvaluationInProgress)
 
                     Button {
                         showingShareSheet.toggle()
@@ -180,7 +202,9 @@ struct PoemListView: View {
         // The poems currently in the list, i.e. `displayedPoems`
         // which is typically `viewModel.filteredPoems`
         let poemsToEvaluate = viewModel.filteredPoems
-        viewModel.evaluateAll(poems: poemsToEvaluate)
+        // Trigger the ViewModel to do it in chunks
+        viewModel.evaluateAllInChunks(poems: poemsToEvaluate)
+        // viewModel.evaluateAll(poems: poemsToEvaluate)
     }
 
 

@@ -53,6 +53,9 @@ public let service = OpenAIServiceFactory.service(apiKey: apiKey)
 
 class PoemViewModel: ObservableObject {
     @Published var poems: [Poem] = []
+    
+    /// Flag indicating if we're currently doing a big evaluate-all operation
+    @Published var isBulkEvaluationInProgress = false
 
     @Published var filter: PoemFilter = .all
     @Published var searchText: String = ""
@@ -334,6 +337,110 @@ class PoemViewModel: ObservableObject {
                     case .failure(let error):
                         print("Error evaluating poem id \(poem.id): \(error)")
                     }
+                }
+            }
+        }
+    }
+    
+    /// Evaluate all poems in parallel, in chunks of 100.
+    /// After each chunk, wait 60 seconds to respect rate limit.
+    func evaluateAllInChunks(poems: [Poem]) {
+        // 1) If already in progress, do nothing
+        if isBulkEvaluationInProgress {
+            print("Bulk evaluation is already running.")
+            return
+        }
+
+        // 2) Mark the flag
+        isBulkEvaluationInProgress = true
+
+        Task {
+            var offset = 0
+//            let chunkSize = 100
+            
+            let poemSize = poems.count
+            var chunkSize = 100  // Default chunk size
+
+            // Calculate the number of runs required
+            var numRuns = poemSize / chunkSize
+            if poemSize % chunkSize != 0 {
+                numRuns += 1
+            }
+
+            // Adjust the chunk size for each run, ensuring it doesn't exceed 100
+            chunkSize = poemSize / numRuns
+            if poemSize % numRuns != 0 {
+                chunkSize += 1
+            }
+
+            print("Total poems: \(poemSize), Runs required: \(numRuns), Chunk size: \(chunkSize)")
+
+            // If no poems, just finish
+            guard !poems.isEmpty else {
+                self.isBulkEvaluationInProgress = false
+                return
+            }
+
+            while offset < poems.count {
+                // 3) Build the chunk
+                let endIndex = min(offset + chunkSize, poems.count)
+                let chunk = Array(poems[offset..<endIndex])
+                print("Evaluating chunk from \(offset) to \(endIndex-1) (\(chunk.count) poems).")
+
+                // 4) Evaluate this chunk in parallel
+                await evaluateChunkParallel(chunk)
+
+                offset += chunkSize
+
+                // 5) If we still have more poems, sleep 60 seconds
+                if offset < poems.count {
+                    print("Finished a chunk; waiting 60s for rate limit cooldown.")
+                    try? await Task.sleep(nanoseconds: 60_000_000_000)
+                }
+            }
+
+            // Done all chunks
+            print("All chunks completed.")
+            self.isBulkEvaluationInProgress = false
+        }
+    }
+
+    /// Evaluate a chunk of poems in parallel withTaskGroup
+    private func evaluateChunkParallel(_ chunk: [Poem]) async {
+        await withTaskGroup(of: (Poem, Result<EvaluationResult, Error>).self) { group in
+            // spawn child tasks in parallel
+            for poem in chunk {
+                group.addTask {
+                    do {
+                        let evaluation = try await self.openAIEvaluatePoem(
+                            prompt: """
+                            Title: \(poem.image)
+                            Body: \(poem.response)
+                            """,
+                            systemPrompt: systemMessage
+                        )
+                        return (poem, .success(evaluation))
+                    } catch {
+                        return (poem, .failure(error))
+                    }
+                }
+            }
+
+            // handle each child as it completes
+            for await (poem, outcome) in group {
+                switch outcome {
+                case .success(let evaluation):
+                    await MainActor.run {
+                        if evaluation.accepted && !evaluation.deleted {
+                            self.accept(poem)
+                        } else if evaluation.deleted {
+                            self.delete(poem)
+                        } else {
+                            print("No decision made for poem ID \(poem.id)")
+                        }
+                    }
+                case .failure(let error):
+                    print("Error evaluating poem id \(poem.id): \(error)")
                 }
             }
         }

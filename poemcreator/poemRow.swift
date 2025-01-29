@@ -13,6 +13,7 @@ struct PoemRow: View {
     let onDelete: () -> Void
 
     let onEvaluate: () -> Void
+    let onCopy: () -> Void
     
     var body: some View {
         HStack {
@@ -57,6 +58,15 @@ struct PoemRow: View {
 
             // If not multi-select, show quick actions
             if !multiSelectionMode {
+                // Add copy button in the row
+                Button(action: {
+                    UIPasteboard.general.string = "\(poem.image)\n\(poem.response)"
+                }) {
+                    Image(systemName: "doc.on.doc")  // Copy icon
+                }
+                .buttonStyle(.plain)
+//                .padding(.trailing, 10)
+                
                 Button {
                     onAccept()
                 } label: {
